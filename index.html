@@ -1,0 +1,81 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#09080d">
+  <title>Project Archive — Armeen Ashraf</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="archive">
+    <header class="topbar">
+      <a class="brand" href="#">AA<span>.</span></a>
+      <a class="github-link" href="https://github.com/armeenashraf" target="_blank" rel="noreferrer">
+        GitHub profile <span>↗</span>
+      </a>
+    </header>
+
+    <section class="intro">
+      <span class="eyebrow"><span class="status-dot"></span> THE PROJECT ARCHIVE</span>
+      <h1>Ideas turned into <span>experiences.</span></h1>
+      <p>A collection of projects, experiments and things I've built while learning web development.</p>
+      <div class="stats">
+        <div><strong id="project-count">--</strong><span>Repositories</span></div>
+        <div><strong>01</strong><span>Developer</span></div>
+        <div><strong>∞</strong><span>Ideas to build</span></div>
+      </div>
+    </section>
+
+    <section class="projects-section">
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">SELECTED WORK & MORE</span>
+          <h2>All projects<span>.</span></h2>
+        </div>
+        <span class="project-total" id="result-count">Loading projects...</span>
+      </div>
+
+      <div class="toolbar">
+        <label class="search-box">
+          <span>⌕</span>
+          <input id="search-input" type="search" placeholder="Search projects..." autocomplete="off">
+          <kbd>/</kbd>
+        </label>
+        <select id="category-filter" aria-label="Filter projects">
+          <option value="all">All projects</option>
+          <option value="web">Websites & apps</option>
+          <option value="javascript">JavaScript</option>
+          <option value="react">React</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+
+      <div class="project-grid" id="project-grid">
+        <div class="loading-card"><span class="loader"></span> Finding your projects...</div>
+      </div>
+
+      <div class="empty-state" id="empty-state" hidden>
+        <span>✳</span>
+        <h3>No projects found</h3>
+        <p>Try another search or category.</p>
+      </div>
+
+      <div class="error-state" id="error-state" hidden>
+        <h3>Couldn't load the archive.</h3>
+        <p>Check your internet connection and try again.</p>
+        <button id="retry-button">Try again ↗</button>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>DESIGNED & BUILT WITH CURIOSITY</span>
+      <span>ARMEEN ASHRAF <span class="footer-star">✳</span></span>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
