@@ -1,14 +1,25 @@
-
 const USERNAME = "armeenashraf";
 const API = `https://api.github.com/users/${USERNAME}/repos?per_page=100&sort=updated`;
+const CACHE_KEY = "gh-projects-v2";
+const CACHE_MS = 60 * 60 * 1000; // 1 hour
 
-const grid = document.querySelector("#project-grid");
-const searchInput = document.querySelector("#search-input");
-const categoryFilter = document.querySelector("#category-filter");
-const resultCount = document.querySelector("#result-count");
-const projectCount = document.querySelector("#project-count");
-const emptyState = document.querySelector("#empty-state");
-const errorState = document.querySelector("#error-state");
+const $ = selector => document.querySelector(selector);
+
+const grid = $("#project-grid");
+const searchInput = $("#search-input");
+const categoryFilter = $("#category-filter");
+const resultCount = $("#result-count");
+const projectCount = $("#project-count");
+const emptyState = $("#empty-state");
+const errorState = $("#error-state");
+const retryButton = $("#retry-button");
+
+// Fail loudly if the HTML is missing an element, instead of a silent blank page
+const required = { grid, searchInput, categoryFilter, resultCount, emptyState, errorState };
+const missing = Object.keys(required).filter(key => !required[key]);
+if (missing.length) {
+  throw new Error(`Missing elements in HTML: ${missing.join(", ")}`);
+}
 
 let projects = [];
 
@@ -85,6 +96,8 @@ const knownProjects = [
   }
 ];
 
+/* ---------- helpers ---------- */
+
 function cleanText(text = "") {
   return text
     .replace(/<[^>]*>/g, " ")
@@ -106,9 +119,10 @@ function decodeBase64(value = "") {
   }
 }
 
-function getKnownProject(repo, readme = "") {
-  const text = `${repo.name} ${repo.description || ""} ${readme}`;
-
+// FIX: match on the repo name and description only, NOT the README,
+// so a README that merely mentions "droply" can't rename another repo.
+function getKnownProject(repo) {
+  const text = `${repo.name} ${repo.description || ""}`;
   return knownProjects.find(project => project.match.test(text));
 }
 
@@ -185,6 +199,23 @@ function getCategory(repo, readme = "") {
   return "other";
 }
 
+function escapeHTML(value = "") {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+
+function getSymbol(category) {
+  const symbols = { web: "✳", javascript: "⌘", react: "◈", other: "✧" };
+  return symbols[category] || "✧";
+}
+
+/* ---------- GitHub requests ---------- */
+
 async function getReadme(repo) {
   try {
     const response = await fetch(
@@ -202,8 +233,12 @@ async function getReadme(repo) {
 }
 
 async function getProject(repo, index) {
-  const readme = await getReadme(repo);
-  const known = getKnownProject(repo, readme);
+  const known = getKnownProject(repo);
+
+  // FIX: only spend an API request on the README when we truly need it.
+  // This cuts ~58 requests down to a handful and avoids the rate limit.
+  const needsReadme = !known && !repo.description;
+  const readme = needsReadme ? await getReadme(repo) : "";
 
   const title = known?.title || getReadmeTitle(readme) || formatRepoName(repo.name);
   const description =
@@ -228,25 +263,28 @@ async function getProject(repo, index) {
   };
 }
 
-function escapeHTML(value = "") {
-  return String(value).replace(/[&<>"']/g, char => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;"
-  })[char]);
+/* ---------- cache ---------- */
+
+function readCache() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+    if (cached && Array.isArray(cached.data) && Date.now() - cached.t < CACHE_MS) {
+      return cached.data;
+    }
+  } catch {}
+  return null;
 }
 
-function getSymbol(category) {
-  const symbols = {
-    web: "✳",
-    javascript: "⌘",
-    react: "◈",
-    other: "✧"
-  };
+function writeCache(data) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), data }));
+  } catch {}
+}
 
-  return symbols[category] || "✧";
+/* ---------- rendering ---------- */
+
+function setCount(n) {
+  if (projectCount) projectCount.textContent = n;
 }
 
 function renderProjects() {
@@ -306,50 +344,127 @@ function renderProjects() {
   `).join("");
 }
 
-async function loadProjects() {
+function showError(error) {
+  grid.hidden = true;
+  emptyState.hidden = true;
+  errorState.hidden = false;
+  resultCount.textContent = "Unable to load";
+
+  // FIX: show the real reason on the page, not just in the console
+  let reason = error.message || "Unknown error";
+  if (error.name === "AbortError") {
+    reason = "GitHub took too long to respond (15 seconds). Please retry.";
+  } else if (/403|rate limit/i.test(reason)) {
+    reason = "GitHub's hourly request limit was reached. Please try again in a while.";
+  } else if (/Failed to fetch|NetworkError/i.test(reason)) {
+    reason = "The request to GitHub was blocked or you are offline. If this page is hosted somewhere that blocks outside requests, GitHub cannot be reached.";
+  }
+
+  let detail = errorState.querySelector("[data-error-detail]");
+  if (!detail) {
+    detail = document.createElement("p");
+    detail.setAttribute("data-error-detail", "");
+    errorState.appendChild(detail);
+  }
+  detail.textContent = reason;
+}
+
+/* ---------- main loader ---------- */
+
+async function loadProjects({ force = false } = {}) {
   grid.hidden = false;
   emptyState.hidden = true;
   errorState.hidden = true;
-  grid.innerHTML = '<div class="loading-card"><span class="loader"></span> Discovering repositories...</div>';
+
+  if (!force) {
+    const cached = readCache();
+    if (cached) {
+      projects = cached;
+      setCount(projects.length);
+      renderProjects();
+      return;
+    }
+  }
+
+  grid.innerHTML = `
+    <div class="loading-card">
+      <span class="loader"></span>
+      Connecting to GitHub...
+    </div>
+  `;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
 
   try {
-    const response = await fetch(API);
+    const response = await fetch(API, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal
+    });
 
     if (!response.ok) {
-      throw new Error("GitHub API request failed");
+      const details = await response.text();
+      throw new Error(`GitHub API returned ${response.status}: ${details}`);
     }
 
     const repos = await response.json();
+
+    if (!Array.isArray(repos)) {
+      throw new Error("GitHub returned an unexpected response.");
+    }
+
     const publicRepos = repos.filter(repo => !repo.archived);
+    setCount(publicRepos.length);
 
-    projectCount.textContent = publicRepos.length;
+    grid.innerHTML = `
+      <div class="loading-card">
+        <span class="loader"></span>
+        Preparing projects...
+      </div>
+    `;
 
-    grid.innerHTML = '<div class="loading-card"><span class="loader"></span> Reading project details...</div>';
-
-    // Readme requests run in small batches to avoid overwhelming the API.
     const results = [];
 
     for (let i = 0; i < publicRepos.length; i += 5) {
       const batch = publicRepos.slice(i, i + 5);
+
       const batchResults = await Promise.all(
         batch.map((repo, offset) => getProject(repo, i + offset))
       );
+
       results.push(...batchResults);
     }
 
     projects = results;
+    writeCache(results);
     renderProjects();
+
   } catch (error) {
-    console.error(error);
-    grid.hidden = true;
-    errorState.hidden = false;
-    resultCount.textContent = "Unable to load";
+    console.error("Project loading failed:", error);
+
+    // If GitHub fails but we have an older cache, still show that
+    try {
+      const stale = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (stale && Array.isArray(stale.data) && stale.data.length) {
+        projects = stale.data;
+        setCount(projects.length);
+        renderProjects();
+        return;
+      }
+    } catch {}
+
+    showError(error);
+
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
+/* ---------- events ---------- */
+
 searchInput.addEventListener("input", renderProjects);
 categoryFilter.addEventListener("change", renderProjects);
-document.querySelector("#retry-button").addEventListener("click", loadProjects);
+if (retryButton) retryButton.addEventListener("click", () => loadProjects({ force: true }));
 
 document.addEventListener("keydown", event => {
   if (
